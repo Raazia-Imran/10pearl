@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ GOLD = {
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", type=Path, help="For example train/bills/KESC_0008.png")
+    parser.add_argument("image", type=Path, help="One training image or a folder containing all five images")
     args = parser.parse_args()
     load_dotenv()
     key = os.getenv("GEMINI_API_KEY")
@@ -46,14 +47,24 @@ def main():
     model = os.getenv("MODEL_NAME", "gemini-3.5-flash-lite")
     if model != "gemini-3.5-flash-lite":
         parser.error("Only the approved gemini-3.5-flash-lite is configured")
-    raw = request_json(genai.Client(api_key=key), model, EXTRACT_PROMPT, args.image)
-    bill = normalize_bill(raw.get("bill", raw), args.image.stem)
-    print(json.dumps({"bill": bill, "history": sanitize_history(raw.get("history", []))}, indent=2, ensure_ascii=False))
-    if args.image.stem == "KESC_0008":
-        differences = {field: {"expected": expected, "actual": bill[field]} for field, expected in GOLD.items() if bill[field] != expected}
-        print("Golden comparison:", "all fields match" if not differences else json.dumps(differences, indent=2))
-        if differences:
-            raise SystemExit(1)
+    images = sorted(path for path in args.image.iterdir() if path.suffix.lower() in {".png", ".jpg", ".jpeg"}) if args.image.is_dir() else [args.image]
+    if not images:
+        parser.error("No training images found")
+    client = genai.Client(api_key=key)
+    failures = 0
+    for index, image in enumerate(images):
+        raw = request_json(client, model, EXTRACT_PROMPT, image)
+        bill = normalize_bill(raw.get("bill", raw), image.stem)
+        print(image.name)
+        print(json.dumps({"bill": bill, "history": sanitize_history(raw.get("history", []))}, indent=2, ensure_ascii=False))
+        if image.stem == "KESC_0008":
+            differences = {field: {"expected": expected, "actual": bill[field]} for field, expected in GOLD.items() if bill[field] != expected}
+            print("Golden comparison:", "all fields match" if not differences else json.dumps(differences, indent=2))
+            failures += bool(differences)
+        if index < len(images) - 1:
+            time.sleep(10)
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
