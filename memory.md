@@ -1,17 +1,19 @@
 # Working memory and handoff
 
-Updated 10 October 2026, before the 12:30 Pakistan time test release. This file records observed facts, not generated conclusions or unverified success.
+Updated 10 October 2026, 12:53 Pakistan time.
 
-## Known environment
-- GitHub repository: https://github.com/Raazia-Imran/10pearl, default branch `main`. Before these planning files it contained `.gitignore`, `README.md`, `test_api.py`.
-- User's Windows clone: `D:\10pearl-repo`. Earlier scratch folder `D:\ALL PROJECTS\10pearl` is separate. The user ran `python test_api.py` in the clone and observed `API test successful.`; commit `09be799` was pushed. The user copied a local `.env` into the clone but did not stage it. Do not expose its contents.
-- User has a Google AI Studio API key under project `Bol-ai`; Gemini usage screen showed `Gemini 3.5 Flash Lite`. Free option is expressly allowed by guide §9.
-- Competition folder: https://drive.google.com/drive/folders/1FSKmeJs5bUYYigS9YATJQ8Fm8diW-XNl. Guide PDF is [here](https://drive.google.com/file/d/1FIzOuil-oJ2nuiempoMDkZojyRivzI1U/view). Training images: IESCO_0004.jpg, KESC_0004.png, KESC_0008.png, LESCO_0005.png, LESCO_0006.png. Test folder was empty when checked before release.
-- Guide says AI coding assistants and chatbots are allowed, but every AI tool used must be listed in the submission README. Allowed runtime model `gemini-3.5-flash-lite`; no OpenAI payment required. No disallowed model may be called.
-- Actual test images and 12 test questions are unknown until 12:30. Do not assert sample questions are the test questions.
+## Environment and authorization
+Repository: https://github.com/Raazia-Imran/10pearl, main. User's Windows clone: D:\\10pearl-repo. Private working GEMINI_API_KEY is in local ignored .env. Only gemini-3.5-flash-lite is used at runtime. ChatGPT / OpenAI Codex coding assistance is disclosed in README. Do not request, print or commit the key.
 
-## Reference checks
-Guide §5.7 gold KESC_0008: provider KE, tariff A1-R, sanctioned 3, bill month 2026-04, reading 2026-04-03, issue 2026-04-07, due 2026-04-21, readings 8819/8970, units 151; charges fixed900, energy1054, energy663.51, QTA52.91, FPA125.27, surcharge64.93; total charges2860.62; ED29.41, GST520.21, municipal20, total taxes569.62; current3430.24; arrears -0.53; due3430; late3716.
+## Rules
+Participant guide is final authority. Submit one ZIP by 13:30 PKT unless organizers explicitly change the deadline. Exact original CSV headers/rows/IDs/questions: Level 1 10 rows with all 18 fields; Level 2 120 nonempty answers. Printed bill values only, null for missing, negative credits/subsidies, no identifiers. No manual scored CSV edits or hard-coded test values. ZIP <=15,000,000 bytes includes outputs, all runnable source, README, exact direct dependency pins and .env.example, never .env. Optional video <=3 minutes.
 
-## Current status and next step
-Planning documents and initial CLI implementation were committed: `main.py`, `prepare_submission.py`, `train_check.py`, `requirements.txt`, `.env.example`, updated README and .gitignore. All five training images were visually inspected; KE includes duplicate lines and credits, LESCO includes net metering and credits, IESCO has a combined tax total and multiple late amounts. Local syntax compilation and a mocked end-to-end 10/120 template-preserving CSV audit passed. **Live Gemini image extraction, Windows local run, final scored CSVs, ZIP and portal submission have not yet been verified.** Next: in Windows clone run `git pull origin main`, download KESC_0008 into `train/bills`, run `python train_check.py "train\\bills\\KESC_0008.png"`; compare with guide and improve extraction as needed. Obtain test folder and templates at 12:30; generate and audit CSVs; submit one ZIP before 13:30. Update this section as steps complete. See [tasks.md](tasks.md) for ordered actions.
+## Observed inputs and verification
+Test folder is live: https://drive.google.com/drive/folders/1MkiTNs-lBSFwET9R--RBCx7FiatO9zQp. Ten attached images and both blank templates were read. Test IDs: IESCO_0002, IESCO_0003, IESCO_0005, KESC_0002, KESC_0003, KESC_0005, KESC_0006, LESCO_0001, LESCO_0002, LESCO_0008. All 120 rows use twelve question types about solar, history maxima, FPA period, late tiers, year comparisons, average units, seasons, payment history, trends, forecast, budget and approximate bill.
+User's latest training run passed KESC_0008 golden comparison and sample numerical answers. All five training images were run on the prior version. New code was syntax checked and tested with mocked responses using the ACTUAL released templates: arithmetic edge cases, 10/120 rows, exact template preservation, cache reuse, changed-image invalidation, ZIP allowlist. These checks do not verify live model image accuracy.
+
+## Current code
+main.py extracts typed bill fields plus usage/payment history. Python computes nine numerical question types when evidence permits; one typed Gemini request handles remaining visual questions per bill. Models never infer twelve KE financial rows from a thirteen-month usage chart (only three financial rows are printed). Detailed LESCO composite Total FPA is not added twice. Categories are typed enums; printed labels normalize QTA/MUCT/ED on FPA. Estimates state method/limitations. Cache includes image/code/model/question fingerprints, atomic writes, timeout/backoff, bill-level recovery. Packaging validates finite numbers, calendar dates, single-line JSON, exact row counts/order and <=15MB. Actual key remains unavailable in agent environment.
+
+## Next action
+User was instructed to pull and run main.py on test/bills and test/csv with --cache ".cache_test" --pause 12. Await GENERATED output/level1.csv, output/level2.csv and output/review.json for image-by-image review. Do not assume attached blank templates are outputs. Keep checkpoints for restart. Fix code and regenerate if errors emerge; never hand-fill results. Then package and inspect submission.zip, optional demo if time, user uploads once and keeps receipt. Final scored output generation and portal submission are NOT yet observed.
