@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from main import EXTRACT_PROMPT, normalize_bill, request_json, sanitize_history
+from main import ANSWER_PROMPT, EXTRACT_PROMPT, calculation_aids, normalize_bill, request_json, sanitize_history
 
 
 GOLD = {
@@ -40,6 +40,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path, help="One training image or a folder containing all five images")
     parser.add_argument("--repeat", type=int, default=1, choices=(1, 2), help="Run each image twice and report fields that change")
+    parser.add_argument("--answers", action="store_true", help="Also rehearse two guide sample questions on KESC_0008")
     args = parser.parse_args()
     load_dotenv()
     key = os.getenv("GEMINI_API_KEY")
@@ -75,6 +76,20 @@ def main():
             differences = {field: {"expected": expected, "actual": bill[field]} for field, expected in GOLD.items() if bill[field] != expected}
             print("Golden comparison:", "all fields match" if not differences else json.dumps(differences, indent=2))
             failures += bool(differences)
+            if args.answers:
+                questions = [
+                    {"question_id": "S1", "question": "How much of my bill is taxes?"},
+                    {"question_id": "S2", "question": "How many months in my history went above 200 units?"},
+                ]
+                prompt = ANSWER_PROMPT + json.dumps(questions) + "\nExtracted nonidentifying facts: " + json.dumps({"bill": bill, "history": history, "calculated_aids": calculation_aids(bill, history)})
+                time.sleep(10)
+                answers = request_json(client, model, prompt, image)
+                if isinstance(answers.get("answers"), dict):
+                    answers = answers["answers"]
+                print("Guide sample Level 2 answers:", json.dumps(answers, indent=2, ensure_ascii=False))
+                if not all(isinstance(answers.get(q), str) and answers[q].strip() for q in ("S1", "S2")):
+                    failures += 1
+                    print("Sample answer check failed: S1 and S2 must both be nonempty")
         if index < len(images) - 1:
             time.sleep(10)
     if failures:
