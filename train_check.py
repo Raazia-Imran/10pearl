@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 
-from main import ANSWER_PROMPT, EXTRACT_PROMPT, calculation_aids, normalize_bill, request_json, sanitize_history
+from main import ANSWER_PROMPT, EXTRACT_PROMPT, ExtractionResponse, calculation_aids, normalize_bill, request_json, sanitize_history
 
 
 GOLD = {
@@ -57,7 +57,7 @@ def main():
     for index, image in enumerate(images):
         runs = []
         for attempt in range(args.repeat):
-            raw = request_json(client, model, EXTRACT_PROMPT, image)
+            raw = request_json(client, model, EXTRACT_PROMPT, image, schema=ExtractionResponse)
             bill = normalize_bill(raw.get("bill", raw), image.stem)
             runs.append((bill, sanitize_history(raw.get("history", []))))
             if attempt < args.repeat - 1:
