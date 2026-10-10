@@ -53,7 +53,7 @@ The model may make reading or reasoning mistakes on difficult scans. Review the 
 
 - Runtime model: **Gemini 3.5 Flash-Lite**, model ID `gemini-3.5-flash-lite`, via Google Gemini API / Google AI Studio free API key and `google-genai==2.29.0`. It reads bill images, extracts structured values and drafts English answers. No other runtime LLM or AI extraction service is used.
 - AI tools used to help write code and planning documentation: **ChatGPT / OpenAI Codex**. The participant guide expressly permits AI coding assistants. If other tools are used later, add their actual names here before packaging.
-- Other services: none. Local libraries: `python-dotenv==1.2.4` plus Python standard library `csv`, `json`, `zipfile`, etc. OCR/invoice-agent services: none.
-- Python: 3.11 or later. `requirements.txt` pins the two non-standard packages exactly.
+- Other services: none. Local libraries: `python-dotenv==1.2.4`, `pydantic==2.14.0` for typed Gemini extraction responses, plus Python standard library `csv`, `json`, `zipfile`, etc. OCR/invoice-agent services: none.
+- Python: 3.11 or later. `requirements.txt` pins all three direct non-standard packages exactly.
 
 The real key is read as `GEMINI_API_KEY` from the local `.env`; `.env.example` contains a placeholder and the actual nonsecret model name. The application rejects any model name other than the permitted `gemini-3.5-flash-lite`.
