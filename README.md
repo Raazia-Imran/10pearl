@@ -13,6 +13,8 @@ copy .env.example .env
 
 Edit only your local `.env` and replace the placeholder with the Google AI Studio key you already tested. If `.env` already contains `GEMINI_API_KEY`, keep it. Never commit or include `.env` in the submission. The model is `gemini-3.5-flash-lite`; `MODEL_NAME` may be omitted because this is the default.
 
+Before the test release, download the training image `KESC_0008.png` and run `python train_check.py "train\bills\KESC_0008.png"`. It prints the extracted nonidentifying data and compares every field to the guide's published expected JSON. A nonzero exit means inspect the shown differences before trusting the pipeline.
+
 Download the organizer's `test/bills/` images and *both original* `test/csv/` templates to the corresponding paths below. These files are released at 12:30 Pakistan time. For PowerShell, use `Set-Location "D:\10pearl-repo"` instead of `cd /d`.
 
 ```text
@@ -39,7 +41,7 @@ For the optional <=3-minute demo, record the image, command, a few values/answer
 
 ## Implementation
 
-The code matches each template `bill_id` to an image, asks the allowed multimodal model for the specified billing schema and nonidentifying monthly usage history, normalizes printed values and types, then submits all questions for that bill in one image-grounded request. A per-bill `.cache/` checkpoint helps reruns after quota/timeouts; retry transient failures. Rows are generated with Python's `csv` module, preserving the original fields and order. No customer identifiers are requested or emitted; unavailable bill fields are `null`. Rate pacing defaults to five seconds between bills; use `--pause 8` if a lower account limit requires it. Delete `.cache/` to force re-extraction after prompt/code changes, or delete one `.cache/<bill_id>.json` for a targeted rerun.
+The code matches each template `bill_id` to an image, asks the allowed multimodal model for the specified billing schema and nonidentifying monthly usage history, normalizes printed values and types, then submits all questions for that bill in one image-grounded request. A per-bill `.cache/` checkpoint helps reruns after quota/timeouts; retry transient failures. Rows are generated with Python's `csv` module, preserving the original fields and order. No customer identifiers are requested or emitted; unavailable bill fields are `null`. Rate pacing defaults to ten seconds between bills; use `--pause 15` if a lower account limit requires it. Delete `.cache/` to force re-extraction after prompt/code changes, or delete one `.cache/<bill_id>.json` for a targeted rerun.
 
 The model may make reading or reasoning mistakes on difficult scans. Review the printed due/late totals, itemized charges/taxes, signs, history chart and numeric answers against the images before uploading. Correct the code or prompt and regenerate outputs; never manually edit scored result cells. The training sample KESC_0008 has the guide's full expected JSON in §5.7, useful as a reference check.
 
