@@ -354,37 +354,45 @@ def run(args):
     answers_by_id = {}
     bills_by_id = {}
     review_by_id = {}
+    failures = {}
     LOG.info("Matched %d bill images and %d question rows", len(ids), len(l2))
     for index, bill_id in enumerate(ids, 1):
-        path = safe_cache_path(args.cache, bill_id)
-        cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        bill = normalize_bill(cached["bill"], bill_id) if "bill" in cached else None
-        history = sanitize_history(cached.get("history", []))
-        if bill is None:
-            extracted = request_json(client, model, EXTRACT_PROMPT, images[bill_id], schema=ExtractionResponse)
-            bill = normalize_bill(extracted.get("bill", extracted), bill_id)
-            history = sanitize_history(extracted.get("history", []))
-            cached = {"bill": bill, "history": history}
-            path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
-        bills_by_id[bill_id] = bill
-        review_by_id[bill_id] = review_flags(bill)
-        expected = [row["question_id"] for row in groups[bill_id]]
-        answers = cached.get("answers")
-        if not isinstance(answers, dict) or any(not str(answers.get(q, "")).strip() for q in expected):
-            questions = [{"question_id": row["question_id"], "question": row["question"]} for row in groups[bill_id]]
-            facts = json.dumps({"bill": bill, "history": history, "calculated_aids": calculation_aids(bill, history)}, ensure_ascii=False, separators=(",", ":"))
-            prompt = ANSWER_PROMPT + json.dumps(questions, ensure_ascii=False) + "\nExtracted nonidentifying facts: " + facts
-            answers = request_json(client, model, prompt, images[bill_id])
-            if "answers" in answers and isinstance(answers["answers"], dict):
-                answers = answers["answers"]
-            if any(not isinstance(answers.get(q), str) or not answers[q].strip() for q in expected):
-                raise ValueError(f"Missing answer(s) for {bill_id}: {expected}")
-            cached["answers"] = {q: answers[q].strip() for q in expected}
-            path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
-        answers_by_id[bill_id] = answers
-        LOG.info("[Bill: %s] %d/%d extraction and %d answers ready", bill_id, index, len(ids), len(expected))
-        if index < len(ids) and args.pause > 0:
-            time.sleep(args.pause)
+        try:
+            path = safe_cache_path(args.cache, bill_id)
+            cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            bill = normalize_bill(cached["bill"], bill_id) if "bill" in cached else None
+            history = sanitize_history(cached.get("history", []))
+            if bill is None:
+                extracted = request_json(client, model, EXTRACT_PROMPT, images[bill_id], schema=ExtractionResponse)
+                bill = normalize_bill(extracted.get("bill", extracted), bill_id)
+                history = sanitize_history(extracted.get("history", []))
+                cached = {"bill": bill, "history": history}
+                path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+            bills_by_id[bill_id] = bill
+            review_by_id[bill_id] = review_flags(bill)
+            expected = [row["question_id"] for row in groups[bill_id]]
+            answers = cached.get("answers")
+            if not isinstance(answers, dict) or any(not str(answers.get(q, "")).strip() for q in expected):
+                questions = [{"question_id": row["question_id"], "question": row["question"]} for row in groups[bill_id]]
+                facts = json.dumps({"bill": bill, "history": history, "calculated_aids": calculation_aids(bill, history)}, ensure_ascii=False, separators=(",", ":"))
+                prompt = ANSWER_PROMPT + json.dumps(questions, ensure_ascii=False) + "\nExtracted nonidentifying facts: " + facts
+                answers = request_json(client, model, prompt, images[bill_id])
+                if "answers" in answers and isinstance(answers["answers"], dict):
+                    answers = answers["answers"]
+                if any(not isinstance(answers.get(q), str) or not answers[q].strip() for q in expected):
+                    raise ValueError(f"Missing answer(s) for {bill_id}: {expected}")
+                cached["answers"] = {q: answers[q].strip() for q in expected}
+                path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+            answers_by_id[bill_id] = answers
+            LOG.info("[Bill: %s] %d/%d extraction and %d answers ready", bill_id, index, len(ids), len(expected))
+        except Exception as exc:
+            failures[bill_id] = type(exc).__name__
+            LOG.error("[Bill: %s] Failed: %s; continuing from checkpoints", bill_id, type(exc).__name__)
+        finally:
+            if index < len(ids) and args.pause > 0:
+                time.sleep(args.pause)
+    if failures:
+        raise RuntimeError(f"Incomplete bills {failures}; successful bill checkpoints saved, rerun after resolving errors")
     out1 = [{"bill_id": row["bill_id"], "json": json.dumps(bills_by_id[row["bill_id"]], ensure_ascii=False, separators=(",", ":"))} for row in l1]
     out2 = [{**row, "answer": " ".join(answers_by_id[row["bill_id"]][row["question_id"]].split())} for row in l2]
     if any(not row["json"] for row in out1) or any(not row["answer"] for row in out2):
