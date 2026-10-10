@@ -17,6 +17,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from pydantic import BaseModel
 
 
 FIELDS = (
@@ -39,6 +40,43 @@ TAX_TYPES = {
 }
 PROVIDERS = {"KESC": "KE", "KE": "KE", "LESCO": "LESCO", "IESCO": "IESCO"}
 
+
+class PrintedLine(BaseModel):
+    type: str
+    amount: float
+    label: str | None = None
+
+
+class HistoryLine(BaseModel):
+    month: str
+    units: float
+
+
+class ExtractedBill(BaseModel):
+    provider: str | None
+    tariff: str | None
+    sanctioned_load_kw: float | None
+    bill_month: str | None
+    reading_date: str | None
+    issue_date: str | None
+    due_date: str | None
+    previous_reading: float | None
+    current_reading: float | None
+    units_consumed: float | None
+    charges: list[PrintedLine]
+    total_charges: float | None
+    taxes: list[PrintedLine]
+    total_taxes: float | None
+    current_bill: float | None
+    arrears: float | None
+    payable_within_due_date: float | None
+    payable_after_due_date: float | None
+
+
+class ExtractionResponse(BaseModel):
+    bill: ExtractedBill
+    history: list[HistoryLine]
+
 EXTRACT_PROMPT = """Read the attached electricity bill carefully. Return only a JSON object with two keys:
 "bill": {"provider":null,"tariff":null,"sanctioned_load_kw":null,"bill_month":null,"reading_date":null,"issue_date":null,"due_date":null,"previous_reading":null,"current_reading":null,"units_consumed":null,"charges":[],"total_charges":null,"taxes":[],"total_taxes":null,"current_bill":null,"arrears":null,"payable_within_due_date":null,"payable_after_due_date":null},
 "history": [{"month":"YYYY-MM","units":number}] for any visible previous usage months, otherwise [].
@@ -49,19 +87,24 @@ Charges = each nonzero printed row from charges section, preserving duplicate ty
 ANSWER_PROMPT = """Answer the attached bill's customer questions in English. Return only JSON mapping each question_id to a nonempty answer string. Use only the image and supplied extracted, nonidentifying facts. Do not reveal names, addresses, account/reference/consumer/meter numbers or CNICs. Be specific: numbers, PKR/units, months, and simple arithmetic when asked. State numerator/denominator for percentages, time window for historical counts, and method for estimates; label estimates. If needed data is absent or unreadable say so, no guessing and no outside tariffs/rates. If ambiguous, state the interpretation or explain both. Do not confuse printed current bill with payable after arrears or late fees. Keep each response concise. Questions JSON follows:\n"""
 
 
-def request_json(client, model, prompt, image, *, retries=4):
+def request_json(client, model, prompt, image, *, retries=4, schema=None):
     mime = "image/jpeg" if image.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
     payload = [prompt, types.Part.from_bytes(data=image.read_bytes(), mime_type=mime)]
     for attempt in range(retries):
         try:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json", temperature=0,
+                **({"response_schema": schema} if schema else {}),
+            )
             response = client.models.generate_content(
                 model=model,
                 contents=payload,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0,
-                ),
+                config=config,
             )
-            value = json.loads(response.text or "")
+            parsed = getattr(response, "parsed", None)
+            value = parsed.model_dump() if hasattr(parsed, "model_dump") else parsed
+            if value is None:
+                value = json.loads(response.text or "")
             if not isinstance(value, dict):
                 raise ValueError("Expected a JSON object from model")
             return value
@@ -115,13 +158,34 @@ def normalize_items(items, allowed):
             raise ValueError("Charge/tax entry must be an object")
         category = item.get("type")
         label = str(item.get("label") or "").upper()
+        if allowed is CHARGE_TYPES:
+            if re.search(r"\bQUARTERLY\b|\bQTA\b", label):
+                category = "quarterly_adjustment"
+            elif re.search(r"\bFPA\b|\bFCA\b|FUEL PRICE ADJUSTMENT", label):
+                category = "fpa"
+            elif "SUBSID" in label or "RELIEF" in label:
+                category = "subsidy"
+            elif "METER RENT" in label or "SERVICE RENT" in label:
+                category = "meter_rent"
+            elif "SURCHARGE" in label:
+                category = "surcharge"
+            elif "FIXED" in label:
+                category = "fixed"
         if allowed is TAX_TYPES and ("MUCT" in label or "KMC" in label or "MUNICIPAL" in label):
             category = "municipal_tax"
+        elif allowed is TAX_TYPES and ("GST" in label or "SALES TAX" in label):
+            category = "gst"
+        elif allowed is TAX_TYPES and ("ELECTRICITY DUTY" in label or re.search(r"\bED\b", label)):
+            category = "electricity_duty"
+        elif allowed is TAX_TYPES and "INCOME TAX" in label:
+            category = "income_tax"
         if category not in allowed:
             raise ValueError(f"Unknown charge/tax category: {category}")
         amount = number(item.get("amount"))
         if amount is None:
             raise ValueError("Charge/tax amount must be numeric")
+        if allowed is CHARGE_TYPES and category == "subsidy":
+            amount = -abs(amount)
         if amount != 0:
             result.append({"type": category, "amount": amount})
     return result
@@ -292,7 +356,7 @@ def run(args):
         bill = normalize_bill(cached["bill"], bill_id) if "bill" in cached else None
         history = sanitize_history(cached.get("history", []))
         if bill is None:
-            extracted = request_json(client, model, EXTRACT_PROMPT, images[bill_id])
+            extracted = request_json(client, model, EXTRACT_PROMPT, images[bill_id], schema=ExtractionResponse)
             bill = normalize_bill(extracted.get("bill", extracted), bill_id)
             history = sanitize_history(extracted.get("history", []))
             cached = {"bill": bill, "history": history}
