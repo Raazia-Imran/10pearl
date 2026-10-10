@@ -44,7 +44,7 @@ EXTRACT_PROMPT = """Read the attached electricity bill carefully. Return only a 
 "history": [{"month":"YYYY-MM","units":number}] for any visible previous usage months, otherwise [].
 
 Rules: provider KE, LESCO or IESCO. Tariff exactly printed. Month YYYY-MM; dates YYYY-MM-DD. Numbers in PKR without Rs or commas; credits/CR and subsidies negative. Extract visible printed values as printed, never recalculate, round or invent. Covered, absent, blank or unreadable => null. Every bill key must appear. No names, addresses, CNICs, account/reference/consumer/meter numbers, or arbitrary OCR transcript.
-Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. Taxes = each nonzero row in tax/government section, types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). Classify by SECTION, not label. A combined tax total without itemized lines gives taxes=[] and total_taxes=printed amount. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; do not include current bill month in previous-month history unless the table explicitly does."""
+Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. Taxes = each nonzero row in tax/government section, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). KE MUCT (KMC), KMC and any Municipal Utility Charges are ALWAYS municipal_tax, NEVER other_tax. Include each tax line's printed label so the program can verify this category; do not include personal labels. Classify by SECTION, not label. A combined tax total without itemized lines gives taxes=[] and total_taxes=printed amount. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; preserve current month separately if printed in a 13-month chart."""
 
 ANSWER_PROMPT = """Answer the attached bill's customer questions in English. Return only JSON mapping each question_id to a nonempty answer string. Use only the image and supplied extracted, nonidentifying facts. Do not reveal names, addresses, account/reference/consumer/meter numbers or CNICs. Be specific: numbers, PKR/units, months, and simple arithmetic when asked. State numerator/denominator for percentages, time window for historical counts, and method for estimates; label estimates. If needed data is absent or unreadable say so, no guessing and no outside tariffs/rates. If ambiguous, state the interpretation or explain both. Do not confuse printed current bill with payable after arrears or late fees. Keep each response concise. Questions JSON follows:\n"""
 
@@ -114,6 +114,9 @@ def normalize_items(items, allowed):
         if not isinstance(item, dict):
             raise ValueError("Charge/tax entry must be an object")
         category = item.get("type")
+        label = str(item.get("label") or "").upper()
+        if allowed is TAX_TYPES and ("MUCT" in label or "KMC" in label or "MUNICIPAL" in label):
+            category = "municipal_tax"
         if category not in allowed:
             raise ValueError(f"Unknown charge/tax category: {category}")
         amount = number(item.get("amount"))
@@ -122,6 +125,23 @@ def normalize_items(items, allowed):
         if amount != 0:
             result.append({"type": category, "amount": amount})
     return result
+
+
+def calculation_aids(bill, history):
+    """Provide audited arithmetic to the answer model without changing printed bill values."""
+    aids = {}
+    current = bill.get("current_bill")
+    taxes = bill.get("total_taxes")
+    if current not in (None, 0) and taxes is not None:
+        aids["tax_share_of_current_bill_percent"] = round(100 * taxes / current, 2)
+    if bill.get("previous_reading") is not None and bill.get("current_reading") is not None:
+        aids["reading_difference_not_necessarily_billed_units"] = round(bill["current_reading"] - bill["previous_reading"], 3)
+    previous = [row for row in history if row["month"] != bill.get("bill_month")]
+    if previous:
+        aids["previous_history_month_count"] = len(previous)
+        aids["previous_history_units_sum"] = round(sum(row["units"] for row in previous), 3)
+        aids["previous_history_units_average"] = round(aids["previous_history_units_sum"] / len(previous), 3)
+    return aids
 
 
 def normalize_bill(raw, bill_id):
@@ -252,7 +272,7 @@ def run(args):
         answers = cached.get("answers")
         if not isinstance(answers, dict) or any(not str(answers.get(q, "")).strip() for q in expected):
             questions = [{"question_id": row["question_id"], "question": row["question"]} for row in groups[bill_id]]
-            facts = json.dumps({"bill": bill, "history": history}, ensure_ascii=False, separators=(",", ":"))
+            facts = json.dumps({"bill": bill, "history": history, "calculated_aids": calculation_aids(bill, history)}, ensure_ascii=False, separators=(",", ":"))
             prompt = ANSWER_PROMPT + json.dumps(questions, ensure_ascii=False) + "\nExtracted nonidentifying facts: " + facts
             answers = request_json(client, model, prompt, images[bill_id])
             if "answers" in answers and isinstance(answers["answers"], dict):
