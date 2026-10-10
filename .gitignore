@@ -4,3 +4,9 @@
 __pycache__/
 *.py[cod]
 .venv/
+.cache/
+output/
+train/
+test/
+demo/
+submission.zip
