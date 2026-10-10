@@ -39,6 +39,7 @@ GOLD = {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path, help="One training image or a folder containing all five images")
+    parser.add_argument("--repeat", type=int, default=1, choices=(1, 2), help="Run each image twice and report fields that change")
     args = parser.parse_args()
     load_dotenv()
     key = os.getenv("GEMINI_API_KEY")
@@ -53,10 +54,23 @@ def main():
     client = genai.Client(api_key=key)
     failures = 0
     for index, image in enumerate(images):
-        raw = request_json(client, model, EXTRACT_PROMPT, image)
-        bill = normalize_bill(raw.get("bill", raw), image.stem)
+        runs = []
+        for attempt in range(args.repeat):
+            raw = request_json(client, model, EXTRACT_PROMPT, image)
+            bill = normalize_bill(raw.get("bill", raw), image.stem)
+            runs.append((bill, sanitize_history(raw.get("history", []))))
+            if attempt < args.repeat - 1:
+                time.sleep(10)
+        bill, history = runs[0]
         print(image.name)
-        print(json.dumps({"bill": bill, "history": sanitize_history(raw.get("history", []))}, indent=2, ensure_ascii=False))
+        print(json.dumps({"bill": bill, "history": history}, indent=2, ensure_ascii=False))
+        if args.repeat == 2:
+            other_bill, other_history = runs[1]
+            changed = {field: {"first": bill[field], "second": other_bill[field]} for field in bill if bill[field] != other_bill[field]}
+            if history != other_history:
+                changed["history"] = {"first": history, "second": other_history}
+            print("Repeatability:", "stable" if not changed else json.dumps(changed, indent=2))
+            failures += bool(changed)
         if image.stem == "KESC_0008":
             differences = {field: {"expected": expected, "actual": bill[field]} for field, expected in GOLD.items() if bill[field] != expected}
             print("Golden comparison:", "all fields match" if not differences else json.dumps(differences, indent=2))
