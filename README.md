@@ -13,7 +13,7 @@ copy .env.example .env
 
 Edit only your local `.env` and replace the placeholder with the Google AI Studio key you already tested. If `.env` already contains `GEMINI_API_KEY`, keep it. Never commit or include `.env` in the submission. The model is `gemini-3.5-flash-lite`; `MODEL_NAME` may be omitted because this is the default.
 
-Before the test release, download all five training images to `train\bills` and run `python train_check.py "train\bills"`. It prints each extraction and compares KESC_0008 to every field in the guide's published expected JSON. A nonzero exit means inspect the shown differences before trusting the pipeline. Running one image with `python train_check.py "train\bills\KESC_0008.png"` also works.
+Before the test release, download all five training images to `train\bills` and run `python train_check.py "train\bills"`. It prints each extraction and compares KESC_0008 to every field in the guide's published expected JSON. For repeatability, run `python train_check.py "train\bills" --repeat 2`: it reports any changing fields and exits nonzero. A nonzero exit means inspect the image; it does not prove which run is correct. Running one image also works.
 
 Download the organizer's `test/bills/` images and *both original* `test/csv/` templates to the corresponding paths below. These files are released at 12:30 Pakistan time. For PowerShell, use `Set-Location "D:\10pearl-repo"` instead of `cd /d`.
 
@@ -36,6 +36,8 @@ python prepare_submission.py --templates "test\csv" --output "output" --zip "sub
 ```
 
 The first command writes `output/level1.csv` and `output/level2.csv`. The second checks the original template columns/row order, all 10 JSON objects, 120 nonempty answers, required schema and ZIP contents/size. It packs exactly the required result files and source allowlist under `output/` and `source/`. Upload `submission.zip` once at https://build.womentechquest.com/submit before 1:30 PM Pakistan time. Do not upload the GitHub repository alone.
+
+Inspect `output/review.json` before packaging. It flags inconsistent printed totals, taxes, readings and dates for manual review; flags are not automatic corrections because net metering, FPA and adjustments can legitimately differ. Compare suspicious values and a sample of Level 2 numeric answers directly with the images. Fix the prompt/code and regenerate rather than editing CSV cells. Delete a `.cache/<bill_id>.json` file to force that bill to be processed again.
 
 For the optional <=3-minute demo, record the image, command, a few values/answers and both generated CSVs, then run `python prepare_submission.py --demo "demo.mp4"` to include it only if the ZIP remains <=15 MB. If the video is large, omit it and prioritize the submission.
 
