@@ -6,7 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import main
@@ -26,6 +28,21 @@ rows. Payments of zero are 0; blanks are null. Dates/months use ISO format.
 Only return fields requested by the response schema. Missing/unreadable scalar fields
 are null. No outside information or training sample values may be used.
 """
+
+
+def history_month(value):
+    """Normalize a printed month label without discarding a history row."""
+    text = str(value).strip().replace("\u2013", "-").replace("\u2014", "-")
+    text = re.sub(r"(?i)\bsept(?=[\s\-/]|$)", "Sep", text)
+    match = re.fullmatch(r"(\d{4})[-/](\d{1,2})", text)
+    if match:
+        return main.normalized_date(f"{int(match[1]):04d}-{int(match[2]):02d}", r"\d{4}-\d{2}")
+    for fmt in ("%Y-%m-%d", "%b-%y", "%b-%Y", "%b %y", "%b %Y", "%B-%y", "%B-%Y", "%B %y", "%B %Y", "%m/%Y", "%m-%Y", "%b/%y", "%b/%Y", "%b%y", "%B%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+    raise ValueError(f"Unreadable history month label: {text!r}; verification response saved for diagnosis")
 
 
 def repair(args):
@@ -82,6 +99,7 @@ def repair(args):
             schema = create_model("VerifiedPrintedFields", **schema_fields)
             prompt = VERIFY + "\nRequested fields: " + ", ".join(schema_fields) + "\nBill month context: " + str(bill["bill_month"])
             raw = main.request_json(client, model, prompt, image, schema=schema)
+            main.checkpoint(path.with_suffix(".verification_response.json"), raw)
             verified = schema.model_validate(raw).model_dump()
             for field in fields:
                 if field == "payable_after_due_date":
@@ -90,8 +108,8 @@ def repair(args):
                 else:
                     bill[field] = main.number(verified[field])
             if bill_id in args.history:
-                history = main.sanitize_history(verified["history"])
-                payments = [{"month": main.normalized_date(r["month"], r"\d{4}-\d{2}"),
+                history = [{"month": history_month(r["month"]), "units": main.number(r["units"])} for r in verified["history"]]
+                payments = [{"month": history_month(r["month"]),
                              "billed_amount": main.number(r["billed_amount"]),
                              "payment": main.number(r["payment"])} for r in verified["payments"]]
                 for name, entries in (("history", history), ("payments", payments)):
