@@ -3,16 +3,17 @@
 import argparse
 import csv
 import json
+import math
 import re
 import sys
 import zipfile
 from pathlib import Path
 
-from main import CHARGE_TYPES, FIELDS, NUMBERS, TAX_TYPES
+from main import CHARGE_TYPES, FIELDS, NUMBERS, TAX_TYPES, normalized_date
 
 
 SOURCE = ("README.md", ".env.example", "requirements.txt", "main.py", "prepare_submission.py", "train_check.py", "test_api.py")
-SIZE_LIMIT = 15 * 1024 * 1024
+SIZE_LIMIT = 15_000_000
 
 
 def read_csv(path, columns):
@@ -38,6 +39,8 @@ def audit(template, output):
     for original, current in zip(expected_1, actual_1):
         if original["bill_id"] != current["bill_id"] or not current["json"]:
             raise ValueError("Level 1 ID/order/JSON mismatch")
+        if '\n' in current["json"] or '\r' in current["json"]:
+            raise ValueError("Level 1 JSON must occupy one line")
         value = json.loads(current["json"])
         if not isinstance(value, dict) or set(value) != set(FIELDS):
             raise ValueError(f"Wrong JSON keys for {original['bill_id']}")
@@ -45,17 +48,18 @@ def audit(template, output):
             raise ValueError("Invalid provider")
         for field in NUMBERS:
             val = value[field]
-            if val is not None and (isinstance(val, bool) or not isinstance(val, (int, float))):
+            if val is not None and (isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val)):
                 raise ValueError(f"Invalid number for {field}")
         for name, allowed in (("charges", CHARGE_TYPES), ("taxes", TAX_TYPES)):
             if not isinstance(value[name], list):
                 raise ValueError(f"Invalid {name}")
             for item in value[name]:
-                if set(item) != {"type", "amount"} or item["type"] not in allowed or isinstance(item["amount"], bool) or not isinstance(item["amount"], (int, float)):
+                if set(item) != {"type", "amount"} or item["type"] not in allowed or isinstance(item["amount"], bool) or not isinstance(item["amount"], (int, float)) or not math.isfinite(item["amount"]) or item["amount"] == 0:
                     raise ValueError(f"Invalid {name} item")
         for field, pattern in (("bill_month", r"\d{4}-\d{2}"), ("reading_date", r"\d{4}-\d{2}-\d{2}"), ("issue_date", r"\d{4}-\d{2}-\d{2}"), ("due_date", r"\d{4}-\d{2}-\d{2}")):
             if value[field] is not None and (not isinstance(value[field], str) or not re.fullmatch(pattern, value[field])):
                 raise ValueError(f"Invalid {field}")
+            normalized_date(value[field], pattern)
     for original, current in zip(expected_2, actual_2):
         if any(original[field] != current[field] for field in ("bill_id", "question_id", "question")) or not current["answer"].strip():
             raise ValueError("Level 2 ID/question/order/answer mismatch")
@@ -78,7 +82,7 @@ def package(repo, output, destination, video):
             archive.write(video, f"demo/demo{video.suffix.lower()}")
     if destination.stat().st_size > SIZE_LIMIT:
         destination.unlink()
-        raise ValueError("ZIP exceeds 15 MiB; omit or compress video")
+        raise ValueError("ZIP exceeds 15 MB; omit or compress video")
     with zipfile.ZipFile(destination) as archive:
         if archive.testzip() is not None:
             raise ValueError("Corrupt ZIP entry")
