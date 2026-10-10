@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import mimetypes
 import os
 import random
 import re
@@ -282,7 +281,7 @@ def parse_args():
     parser.add_argument("--level2-template", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("output"))
     parser.add_argument("--cache", type=Path, default=Path(".cache"))
-    parser.add_argument("--pause", type=float, default=5, help="Seconds between bills to pace free tier")
+    parser.add_argument("--pause", type=float, default=10, help="Seconds between bills to pace free tier")
     return parser.parse_args()
 
 
