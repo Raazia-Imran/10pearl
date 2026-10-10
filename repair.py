@@ -8,11 +8,22 @@ import json
 import os
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import main
-from pydantic import create_model
+from pydantic import BaseModel, create_model
+
+
+class FinancialAmounts(BaseModel):
+    billed_amount: float | None
+    payment: float | None
+
+
+class LateTiers(BaseModel):
+    first_tier_last_day: str
+    first_surcharge: float
+    second_surcharge: float
 
 
 VERIFY = """Independently reread ONLY the requested fields from the original bill image.
@@ -68,7 +79,8 @@ def repair(args):
             if field not in main.NUMBERS:
                 raise ValueError(f"Unsupported verification field: {field}")
             requested[bill_id].add(field)
-    ids = sorted(set(requested) | set(args.history) | set(args.late))
+    payment_ids = getattr(args, "payments", [])
+    ids = sorted(set(requested) | set(args.history) | set(args.late) | set(payment_ids))
     if not ids:
         raise ValueError("Select --fields, --history or --late")
     code_hash = hashlib.sha256(Path(main.__file__).read_bytes()).hexdigest()
@@ -82,7 +94,9 @@ def repair(args):
         if cached.get("fingerprint") != fingerprint:
             raise ValueError(f"Checkpoint does not match current image/code/questions: {bill_id}; do not delete it")
         fields = sorted(requested[bill_id])
-        signature = hashlib.sha256(json.dumps([fingerprint, verifier_hash, fields, bill_id in args.history, bill_id in args.late]).encode()).hexdigest()
+        crop_path = getattr(args, "history_image", None)
+        crop_hash = hashlib.sha256(crop_path.read_bytes()).hexdigest() if crop_path else None
+        signature = hashlib.sha256(json.dumps([fingerprint, verifier_hash, fields, bill_id in args.history, bill_id in args.late, bill_id in payment_ids, crop_hash]).encode()).hexdigest()
         if not args.force and signature in cached.get("verified_repairs", []):
             main.LOG.info("[Bill: %s] Verified checkpoint reused", bill_id)
             continue
@@ -142,22 +156,42 @@ def repair(args):
                     raise ValueError(f"Reread still lacks a full 12-month history for {bill_id}; original checkpoint retained")
             bill = main.normalize_bill(bill, bill_id)
             answers.update(main.deterministic_answers(bill, history, payments, questions))
+        if bill_id in payment_ids:
+            months = [main.shift_month(bill["bill_month"], -n) for n in range(12, 0, -1)]
+            schema = create_model("MonthlyPrintedFinances", **{m: (FinancialAmounts, ...) for m in months})
+            prompt = (VERIFY + "\nReturn a mapping with these exact monthly keys: " + json.dumps(months) +
+                      "\nFor EACH month read BILL (RS.) and PAYMENT (RS.) on that SAME horizontal row. "
+                      "Read LEFT and RIGHT halves independently. Do not shift values up or down one row. "
+                      "The first data row on each half overlaps the headings. A payment printed 0 is zero. "
+                      "A blank or unreadable cell is null. Do not copy billing amounts into payments, "
+                      "and do not use earlier extracted financial values. No totals or averages are requested.")
+            raw = main.request_json(client, model, prompt, crop_path or image, schema=schema)
+            values = schema.model_validate(raw).model_dump()
+            payments = [{"month": m, "billed_amount": main.number(values[m]["billed_amount"]),
+                         "payment": main.number(values[m]["payment"])} for m in months]
+            if any(r["billed_amount"] is None or r["payment"] is None for r in payments):
+                raise ValueError(f"Some financial cells remain unreadable for {bill_id}; checkpoint retained")
+            answers.update(main.deterministic_answers(bill, history, payments, questions))
         if bill_id in args.late:
             pending = [q for q in questions if "late payment surcharge" in q["question"].lower()]
             if not pending:
                 raise ValueError(f"No late-payment question for {bill_id}")
-            schema = create_model("VerifiedLateAnswers", **{q["question_id"]: (str, ...) for q in pending})
-            prompt = (main.ANSWER_PROMPT + json.dumps(pending) +
-                      "\nIndependently inspect the entire payment totals panel and both printed date tiers. "
-                      "A first late amount can be printed twice in two locations; do not mistake that "
-                      "for absence of the second tier. State both surcharge amounts and inclusive date windows. "
-                      "A tier labelled AFTER a cutoff starts the following day, not on that cutoff. "
-                      "Give dates as YYYY-MM-DD where legible. Distinguish the added surcharge from total payable. "
-                      "Do not use previous answer text or external tariff rates.")
-            verified_answers = schema.model_validate(main.request_json(client, model, prompt, image, schema=schema)).model_dump()
-            if any(not value.strip() for value in verified_answers.values()):
-                raise ValueError(f"Empty verified answer for {bill_id}")
-            answers.update(verified_answers)
+            prompt = ("Read both PRINTED late-payment SURCHARGE tiers, not the total payable amounts. "
+                      "Return first_surcharge, second_surcharge, and first_tier_last_day in YYYY-MM-DD. "
+                      "The first tier is labelled TILL/UP TO; the second is AFTER that same cutoff. "
+                      "The surcharge-free due date is " + str(bill["due_date"]) +
+                      "; do not confuse it with the later first-tier cutoff. No outside rates, personal identifiers or guessed dates.")
+            tiers = LateTiers.model_validate(main.request_json(client, model, prompt, image, schema=LateTiers)).model_dump()
+            cutoff = date.fromisoformat(main.normalized_date(tiers["first_tier_last_day"], r"\d{4}-\d{2}-\d{2}"))
+            due = date.fromisoformat(bill["due_date"])
+            first, second = main.number(tiers["first_surcharge"]), main.number(tiers["second_surcharge"])
+            if cutoff <= due or first < 0 or second < first:
+                raise ValueError(f"Inconsistent late-payment tiers for {bill_id}")
+            answer = (f"The surcharge-free due date is {due.isoformat()}. An added surcharge of PKR {first:,.2f} applies "
+                      f"from {(due + timedelta(days=1)).isoformat()} through {cutoff.isoformat()} inclusive; "
+                      f"PKR {second:,.2f} applies from {(cutoff + timedelta(days=1)).isoformat()} onward. "
+                      "These are surcharges added to the payable amount, not total bill amounts.")
+            answers.update({q["question_id"]: answer for q in pending})
         if any(not isinstance(answers.get(q["question_id"]), str) or not answers[q["question_id"]].strip() for q in questions):
             raise ValueError(f"Incomplete answers for {bill_id}")
         backup = path.with_suffix(".before_repair.json")
@@ -182,6 +216,7 @@ def parse_args():
     parser.add_argument("--history", nargs="*", default=[])
     parser.add_argument("--history-image", type=Path, help="Optional cropped history region from the same bill")
     parser.add_argument("--late", nargs="*", default=[])
+    parser.add_argument("--payments", nargs="*", default=[], help="Independently reread twelve month-keyed billing/payment rows")
     parser.add_argument("--force", action="store_true", help="Reread already verified selections")
     return parser.parse_args()
 
