@@ -15,6 +15,8 @@ Edit only your local `.env` and replace the placeholder with the Google AI Studi
 
 Before the test release, download all five training images to `train\bills` and run `python train_check.py "train\bills"`. It prints each extraction and compares KESC_0008 to every field in the guide's published expected JSON. For repeatability, run `python train_check.py "train\bills" --repeat 2`: it reports any changing fields and exits nonzero. A nonzero exit means inspect the image; it does not prove which run is correct. Running one image also works.
 
+To rehearse Level 2 before the real test questions arrive, run `python train_check.py "train\bills\KESC_0008.png" --answers`. It asks the two **sample** questions in guide §6.2. Inspect that the tax answer uses PKR 569.62 / 3,430.24 (about 16.6%) and the history answer counts July and August 2025, 239 and 203 units. These sample questions are not the released test questions.
+
 Download the organizer's `test/bills/` images and *both original* `test/csv/` templates to the corresponding paths below. These files are released at 12:30 Pakistan time. For PowerShell, use `Set-Location "D:\10pearl-repo"` instead of `cd /d`.
 
 ```text
