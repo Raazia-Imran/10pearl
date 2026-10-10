@@ -11,7 +11,7 @@ from pathlib import Path
 from main import CHARGE_TYPES, FIELDS, NUMBERS, TAX_TYPES
 
 
-SOURCE = ("README.md", ".env.example", "requirements.txt", "main.py", "prepare_submission.py", "test_api.py")
+SOURCE = ("README.md", ".env.example", "requirements.txt", "main.py", "prepare_submission.py", "train_check.py", "test_api.py")
 SIZE_LIMIT = 15 * 1024 * 1024
 
 
