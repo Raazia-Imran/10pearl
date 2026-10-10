@@ -44,7 +44,7 @@ EXTRACT_PROMPT = """Read the attached electricity bill carefully. Return only a 
 "history": [{"month":"YYYY-MM","units":number}] for any visible previous usage months, otherwise [].
 
 Rules: provider KE, LESCO or IESCO. Tariff exactly printed. Month YYYY-MM; dates YYYY-MM-DD. Numbers in PKR without Rs or commas; credits/CR and subsidies negative. Extract visible printed values as printed, never recalculate, round or invent. Covered, absent, blank or unreadable => null. Every bill key must appear. No names, addresses, CNICs, account/reference/consumer/meter numbers, or arbitrary OCR transcript.
-Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. Taxes = each nonzero ITEMIZED row in tax/government section, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). KE MUCT (KMC), KMC and Municipal Utility Charges are ALWAYS municipal_tax. Include each tax line's printed label. A single summary line labeled just "Taxes" or "Taxes 15.24%" is a COMBINED TOTAL, not an itemized other_tax: taxes=[] and total_taxes=the printed amount. Classify itemized lines by SECTION. For total_charges copy a PRINTED charge subtotal ("Electricity Charges" or "Net Electricity Charges"); never invent a subtotal by adding charge lines or FPA. If no charge subtotal is printed, total_charges=null. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; preserve current month separately if printed in a 13-month chart."""
+Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. A separately printed "Total FPA" in the bill charges breakdown is an fpa charge line even if outside the printed net electricity subtotal. Taxes = each nonzero ITEMIZED row in tax/government section, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). KE MUCT (KMC), KMC and Municipal Utility Charges are ALWAYS municipal_tax. Include each tax line's printed label. A single summary line labeled just "Taxes" or "Taxes 15.24%" is a COMBINED TOTAL, not an itemized other_tax: taxes=[] and total_taxes=the printed amount. Classify itemized lines by SECTION. For total_charges copy a PRINTED charge subtotal ("Electricity Charges" or "Net Electricity Charges"); never invent a subtotal by adding charge lines or FPA. If no charge subtotal is printed, total_charges=null. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; preserve current month separately if printed in a 13-month chart."""
 
 ANSWER_PROMPT = """Answer the attached bill's customer questions in English. Return only JSON mapping each question_id to a nonempty answer string. Use only the image and supplied extracted, nonidentifying facts. Do not reveal names, addresses, account/reference/consumer/meter numbers or CNICs. Be specific: numbers, PKR/units, months, and simple arithmetic when asked. State numerator/denominator for percentages, time window for historical counts, and method for estimates; label estimates. If needed data is absent or unreadable say so, no guessing and no outside tariffs/rates. If ambiguous, state the interpretation or explain both. Do not confuse printed current bill with payable after arrears or late fees. Keep each response concise. Questions JSON follows:\n"""
 
@@ -142,6 +142,26 @@ def calculation_aids(bill, history):
         aids["previous_history_units_sum"] = round(sum(row["units"] for row in previous), 3)
         aids["previous_history_units_average"] = round(aids["previous_history_units_sum"] / len(previous), 3)
     return aids
+
+
+def review_flags(bill):
+    """Attention flags only: bills can legitimately contain adjustments and rounding."""
+    flags = []
+    if bill["taxes"] and bill["total_taxes"] is not None:
+        total = sum(item["amount"] for item in bill["taxes"])
+        if abs(total - bill["total_taxes"]) > 1:
+            flags.append(f"Itemized taxes {total:g} differ from printed total_taxes {bill['total_taxes']:g}; inspect tax section")
+    if bill["charges"] and bill["total_charges"] is not None:
+        total = sum(item["amount"] for item in bill["charges"])
+        if abs(total - bill["total_charges"]) > 1:
+            flags.append(f"Charge rows sum to {total:g}, printed total_charges is {bill['total_charges']:g}; inspect subtotal scope and FPA")
+    if bill["previous_reading"] is not None and bill["current_reading"] is not None and bill["units_consumed"] is not None:
+        delta = bill["current_reading"] - bill["previous_reading"]
+        if abs(delta - bill["units_consumed"]) > 1:
+            flags.append("Printed units differ from first meter reading difference; inspect net metering or multiplier")
+    if bill["issue_date"] and bill["due_date"] and bill["due_date"] < bill["issue_date"]:
+        flags.append("Due date precedes issue date; inspect year/month")
+    return flags
 
 
 def normalize_bill(raw, bill_id):
@@ -262,6 +282,7 @@ def run(args):
     client = genai.Client(api_key=key)
     answers_by_id = {}
     bills_by_id = {}
+    review_by_id = {}
     print(f"Matched {len(ids)} bill images and {len(l2)} question rows.", flush=True)
     for index, bill_id in enumerate(ids, 1):
         path = safe_cache_path(args.cache, bill_id)
@@ -275,6 +296,7 @@ def run(args):
             cached = {"bill": bill, "history": history}
             path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
         bills_by_id[bill_id] = bill
+        review_by_id[bill_id] = review_flags(bill)
         expected = [row["question_id"] for row in groups[bill_id]]
         answers = cached.get("answers")
         if not isinstance(answers, dict) or any(not str(answers.get(q, "")).strip() for q in expected):
@@ -298,7 +320,9 @@ def run(args):
         raise ValueError("Refusing to write incomplete outputs")
     write_csv(args.output / "level1.csv", ["bill_id", "json"], out1)
     write_csv(args.output / "level2.csv", ["bill_id", "question_id", "question", "answer"], out2)
+    (args.output / "review.json").write_text(json.dumps(review_by_id, indent=2), encoding="utf-8")
     print(f"Generated {args.output / 'level1.csv'} ({len(out1)} rows) and {args.output / 'level2.csv'} ({len(out2)} rows).", flush=True)
+    print(f"Review attention flags in {args.output / 'review.json'}; flagged differences may be legitimate printed adjustments.", flush=True)
 
 
 def parse_args():
