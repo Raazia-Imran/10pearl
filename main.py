@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
 import random
 import re
@@ -18,6 +19,10 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
+
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s", stream=sys.stderr)
+LOG = logging.getLogger("bill_decoder")
 
 
 FIELDS = (
@@ -112,7 +117,7 @@ def request_json(client, model, prompt, image, *, retries=4, schema=None):
             if attempt == retries - 1:
                 raise RuntimeError(f"Model response failed for {image.stem}: {type(exc).__name__}") from exc
             wait = min(40, 2 ** attempt * 3 + random.random() * 2)
-            print(f"Retry {image.stem} after {type(exc).__name__}; {wait:.1f}s", file=sys.stderr)
+            LOG.warning("[Bill: %s] Retry after %s in %.1fs", image.stem, type(exc).__name__, wait)
             time.sleep(wait)
 
 
@@ -349,7 +354,7 @@ def run(args):
     answers_by_id = {}
     bills_by_id = {}
     review_by_id = {}
-    print(f"Matched {len(ids)} bill images and {len(l2)} question rows.", flush=True)
+    LOG.info("Matched %d bill images and %d question rows", len(ids), len(l2))
     for index, bill_id in enumerate(ids, 1):
         path = safe_cache_path(args.cache, bill_id)
         cached = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -377,7 +382,7 @@ def run(args):
             cached["answers"] = {q: answers[q].strip() for q in expected}
             path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
         answers_by_id[bill_id] = answers
-        print(f"[{index}/{len(ids)}] {bill_id}: extraction and {len(expected)} answers ready", flush=True)
+        LOG.info("[Bill: %s] %d/%d extraction and %d answers ready", bill_id, index, len(ids), len(expected))
         if index < len(ids) and args.pause > 0:
             time.sleep(args.pause)
     out1 = [{"bill_id": row["bill_id"], "json": json.dumps(bills_by_id[row["bill_id"]], ensure_ascii=False, separators=(",", ":"))} for row in l1]
@@ -387,8 +392,8 @@ def run(args):
     write_csv(args.output / "level1.csv", ["bill_id", "json"], out1)
     write_csv(args.output / "level2.csv", ["bill_id", "question_id", "question", "answer"], out2)
     (args.output / "review.json").write_text(json.dumps(review_by_id, indent=2), encoding="utf-8")
-    print(f"Generated {args.output / 'level1.csv'} ({len(out1)} rows) and {args.output / 'level2.csv'} ({len(out2)} rows).", flush=True)
-    print(f"Review attention flags in {args.output / 'review.json'}; flagged differences may be legitimate printed adjustments.", flush=True)
+    LOG.info("Generated %s (%d rows) and %s (%d rows)", args.output / "level1.csv", len(out1), args.output / "level2.csv", len(out2))
+    LOG.info("Review attention flags in %s; differences may be legitimate printed adjustments", args.output / "review.json")
 
 
 def parse_args():
@@ -406,5 +411,5 @@ if __name__ == "__main__":
     try:
         run(parse_args())
     except (ValueError, FileNotFoundError, RuntimeError, OSError, json.JSONDecodeError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        LOG.error("%s", error)
         raise SystemExit(1) from error
