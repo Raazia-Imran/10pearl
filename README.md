@@ -13,7 +13,7 @@ copy .env.example .env
 
 Edit only your local `.env` and replace the placeholder with the Google AI Studio key you already tested. If `.env` already contains `GEMINI_API_KEY`, keep it. Never commit or include `.env` in the submission. The model is `gemini-3.5-flash-lite`; `MODEL_NAME` may be omitted because this is the default.
 
-Before the test release, download the training image `KESC_0008.png` and run `python train_check.py "train\bills\KESC_0008.png"`. It prints the extracted nonidentifying data and compares every field to the guide's published expected JSON. A nonzero exit means inspect the shown differences before trusting the pipeline.
+Before the test release, download all five training images to `train\bills` and run `python train_check.py "train\bills"`. It prints each extraction and compares KESC_0008 to every field in the guide's published expected JSON. A nonzero exit means inspect the shown differences before trusting the pipeline. Running one image with `python train_check.py "train\bills\KESC_0008.png"` also works.
 
 Download the organizer's `test/bills/` images and *both original* `test/csv/` templates to the corresponding paths below. These files are released at 12:30 Pakistan time. For PowerShell, use `Set-Location "D:\10pearl-repo"` instead of `cd /d`.
 
