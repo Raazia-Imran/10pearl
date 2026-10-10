@@ -65,3 +65,13 @@ Local tests with the actual released template structure verified 10/120 rows, ex
 - Python: 3.11 or later. `requirements.txt` pins all three direct non-standard packages exactly.
 
 The real key is read as `GEMINI_API_KEY` from the local `.env`; `.env.example` contains a placeholder and the actual nonsecret model name. The application rejects any model name other than the permitted `gemini-3.5-flash-lite`.
+
+## Targeted image verification
+
+Use `repair.py` when image review finds a suspicious numeric field, missing history row or incomplete late-payment answer. It calls the same permitted model for selected image regions/fields, validates the reread, regenerates Python numerical answers and writes both CSVs through the original pipeline. It does not hard-code bill values or manually edit scored CSV cells. `--fields BILL_ID:field,field` selects numeric fields; `--history BILL_ID` rereads a complete twelve-month usage/payment table; `--late BILL_ID` rereads the late-payment question. Original checkpoints are backed up before replacement; verified selections are reused on rerun. The tool rejects checkpoints whose image, main code or questions have changed. Keep existing successful checkpoints.
+
+```bat
+python repair.py --bills "test\bills" --templates "test\csv" --cache ".cache_test" --fields "BILL_ID:total_taxes" --history BILL_ID
+```
+
+Replace `BILL_ID` with an actual template ID. After verification, inspect the regenerated CSVs against the image and run `prepare_submission.py` as above. Mocked tests cover targeted requests, backup preservation, calculation regeneration, 10/120 output integrity and identical cached reruns; actual Gemini readings still require visual review.
