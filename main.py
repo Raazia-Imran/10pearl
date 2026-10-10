@@ -44,7 +44,7 @@ EXTRACT_PROMPT = """Read the attached electricity bill carefully. Return only a 
 "history": [{"month":"YYYY-MM","units":number}] for any visible previous usage months, otherwise [].
 
 Rules: provider KE, LESCO or IESCO. Tariff exactly printed. Month YYYY-MM; dates YYYY-MM-DD. Numbers in PKR without Rs or commas; credits/CR and subsidies negative. Extract visible printed values as printed, never recalculate, round or invent. Covered, absent, blank or unreadable => null. Every bill key must appear. No names, addresses, CNICs, account/reference/consumer/meter numbers, or arbitrary OCR transcript.
-Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. Taxes = each nonzero row in tax/government section, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). KE MUCT (KMC), KMC and any Municipal Utility Charges are ALWAYS municipal_tax, NEVER other_tax. Include each tax line's printed label so the program can verify this category; do not include personal labels. Classify by SECTION, not label. A combined tax total without itemized lines gives taxes=[] and total_taxes=printed amount. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; preserve current month separately if printed in a 13-month chart."""
+Charges = each nonzero printed row from charges section, preserving duplicate types, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types energy, fixed, fpa (including FCA), quarterly_adjustment, surcharge, meter_rent, subsidy, other. Taxes = each nonzero ITEMIZED row in tax/government section, each {"type":...,"amount":number,"label":"printed nonidentifying line name"}. Types gst (including GST on FPA), electricity_duty, income_tax, municipal_tax, other_tax (including TV fee in tax section). KE MUCT (KMC), KMC and Municipal Utility Charges are ALWAYS municipal_tax. Include each tax line's printed label. A single summary line labeled just "Taxes" or "Taxes 15.24%" is a COMBINED TOTAL, not an itemized other_tax: taxes=[] and total_taxes=the printed amount. Classify itemized lines by SECTION. For total_charges copy a PRINTED charge subtotal ("Electricity Charges" or "Net Electricity Charges"); never invent a subtotal by adding charge lines or FPA. If no charge subtotal is printed, total_charges=null. Subtotals only if printed. Arrears printed sign. Due date is last surcharge-free day. If several late payables, choose highest. Current units are printed billed units, not difference of meter readings. History only if a monthly history table is visible; preserve current month separately if printed in a 13-month chart."""
 
 ANSWER_PROMPT = """Answer the attached bill's customer questions in English. Return only JSON mapping each question_id to a nonempty answer string. Use only the image and supplied extracted, nonidentifying facts. Do not reveal names, addresses, account/reference/consumer/meter numbers or CNICs. Be specific: numbers, PKR/units, months, and simple arithmetic when asked. State numerator/denominator for percentages, time window for historical counts, and method for estimates; label estimates. If needed data is absent or unreadable say so, no guessing and no outside tariffs/rates. If ambiguous, state the interpretation or explain both. Do not confuse printed current bill with payable after arrears or late fees. Keep each response concise. Questions JSON follows:\n"""
 
@@ -164,7 +164,14 @@ def normalize_bill(raw, bill_id):
     for key in NUMBERS:
         bill[key] = number(bill[key])
     bill["charges"] = normalize_items(bill["charges"], CHARGE_TYPES)
-    bill["taxes"] = normalize_items(bill["taxes"], TAX_TYPES)
+    raw_taxes = bill["taxes"]
+    if isinstance(raw_taxes, list) and len(raw_taxes) == 1 and isinstance(raw_taxes[0], dict):
+        label = str(raw_taxes[0].get("label") or "").strip().lower()
+        if re.fullmatch(r"taxes(?:\s+\d+(?:\.\d+)?\s*%)?", label):
+            if bill["total_taxes"] is None:
+                bill["total_taxes"] = number(raw_taxes[0].get("amount"))
+            raw_taxes = []
+    bill["taxes"] = normalize_items(raw_taxes, TAX_TYPES)
     return bill
 
 
