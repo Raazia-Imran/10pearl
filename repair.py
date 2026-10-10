@@ -98,8 +98,13 @@ def repair(args):
         if schema_fields:
             schema = create_model("VerifiedPrintedFields", **schema_fields)
             prompt = VERIFY + "\nRequested fields: " + ", ".join(schema_fields) + "\nBill month context: " + str(bill["bill_month"])
-            raw = main.request_json(client, model, prompt, image, schema=schema)
-            main.checkpoint(path.with_suffix(".verification_response.json"), raw)
+            response_path = path.with_suffix(".verification_response.json")
+            if response_path.exists() and not args.force:
+                raw = json.loads(response_path.read_text(encoding="utf-8"))
+                schema.model_validate(raw)
+            else:
+                raw = main.request_json(client, model, prompt, image, schema=schema)
+                main.checkpoint(response_path, raw)
             verified = schema.model_validate(raw).model_dump()
             for field in fields:
                 if field == "payable_after_due_date":
@@ -116,6 +121,23 @@ def repair(args):
                     if len({r["month"] for r in entries}) != len(entries):
                         raise ValueError(f"Duplicate {name} month: {bill_id}")
                 wanted = {main.shift_month(bill["bill_month"], -n) for n in range(1, 13)}
+                missing = wanted - {r["month"] for r in history} | wanted - {r["month"] for r in payments}
+                if missing:
+                    row_schema = create_model("MissingPrintedRows", history=(list[main.HistoryLine], ...), payments=(list[main.PaymentLine], ...))
+                    row_prompt = (VERIFY + "\nReread these specific history months: " + json.dumps(sorted(missing)) +
+                                  "\nThe FIRST data row on EACH half overlaps the MONTH/UNITS/BILL/PAYMENT header. "
+                                  "Read the numbers immediately under/overlapping the header, not just rows below it. "
+                                  "Return only the requested months and printed numbers; do not invent a row.")
+                    row_image = getattr(args, "history_image", None) or image
+                    extra = main.request_json(client, model, row_prompt, row_image, schema=row_schema)
+                    extra = row_schema.model_validate(extra).model_dump()
+                    for name, entries in (("history", history), ("payments", payments)):
+                        merged = {r["month"]: r for r in entries}
+                        for row in extra[name]:
+                            row["month"] = history_month(row["month"])
+                            if row["month"] in missing:
+                                merged[row["month"]] = row
+                        entries[:] = sorted(merged.values(), key=lambda r: r["month"])
                 if not wanted.issubset({r["month"] for r in history}) or not wanted.issubset({r["month"] for r in payments}):
                     raise ValueError(f"Reread still lacks a full 12-month history for {bill_id}; original checkpoint retained")
             bill = main.normalize_bill(bill, bill_id)
@@ -158,6 +180,7 @@ def parse_args():
     parser.add_argument("--output", type=Path, default=Path("output"))
     parser.add_argument("--fields", nargs="*", default=[])
     parser.add_argument("--history", nargs="*", default=[])
+    parser.add_argument("--history-image", type=Path, help="Optional cropped history region from the same bill")
     parser.add_argument("--late", nargs="*", default=[])
     parser.add_argument("--force", action="store_true", help="Reread already verified selections")
     return parser.parse_args()
