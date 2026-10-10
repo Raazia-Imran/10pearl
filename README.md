@@ -1,16 +1,53 @@
-# 10pearl
+# Utility Bill Decoder — WTQ Build Track 2026
 
-Starter repository for the Women Tech Quest 2026 project.
+Python 3.11+ CLI using Google's Gemini 3.5 Flash-Lite to read KE, LESCO and IESCO bill images and answer the organizer's 12 questions per bill. The program generates both output CSVs directly from the original templates. No hosted service is needed.
 
-## API setup
+## Setup (Windows Command Prompt)
 
-This project is being prepared with a Google AI Studio API key and the competition-approved model `gemini-3.5-flash-lite`. The challenge implementation will be added when the competition task is available.
+```bat
+cd /d "D:\10pearl-repo"
+python --version
+python -m pip install -r requirements.txt
+copy .env.example .env
+```
 
-1. Install Python 3.11 or later.
-2. Install the SDK: `python -m pip install --upgrade google-genai python-dotenv`.
-3. Create a local `.env` file with `GEMINI_API_KEY=your_key_here`.
-4. Keep the real key private. The `.env` file is excluded from Git.
+Edit only your local `.env` and replace the placeholder with the Google AI Studio key you already tested. If `.env` already contains `GEMINI_API_KEY`, keep it. Never commit or include `.env` in the submission. The model is `gemini-3.5-flash-lite`; `MODEL_NAME` may be omitted because this is the default.
 
-## Development
+Download the organizer's `test/bills/` images and *both original* `test/csv/` templates to the corresponding paths below. These files are released at 12:30 Pakistan time. For PowerShell, use `Set-Location "D:\10pearl-repo"` instead of `cd /d`.
 
-Use an explicitly allowed model ID in API requests. Record the model used for the competition submission.
+```text
+D:\10pearl-repo\
+  main.py
+  prepare_submission.py
+  requirements.txt
+  .env
+  test\bills\ (10 PNG/JPG images)
+  test\csv\level1.csv
+  test\csv\level2.csv
+```
+
+## Run
+
+```bat
+python main.py --bills "test\bills" --level1-template "test\csv\level1.csv" --level2-template "test\csv\level2.csv" --output "output"
+python prepare_submission.py --templates "test\csv" --output "output" --zip "submission.zip"
+```
+
+The first command writes `output/level1.csv` and `output/level2.csv`. The second checks the original template columns/row order, all 10 JSON objects, 120 nonempty answers, required schema and ZIP contents/size. It packs exactly the required result files and source allowlist under `output/` and `source/`. Upload `submission.zip` once at https://build.womentechquest.com/submit before 1:30 PM Pakistan time. Do not upload the GitHub repository alone.
+
+For the optional <=3-minute demo, record the image, command, a few values/answers and both generated CSVs, then run `python prepare_submission.py --demo "demo.mp4"` to include it only if the ZIP remains <=15 MB. If the video is large, omit it and prioritize the submission.
+
+## Implementation
+
+The code matches each template `bill_id` to an image, asks the allowed multimodal model for the specified billing schema and nonidentifying monthly usage history, normalizes printed values and types, then submits all questions for that bill in one image-grounded request. A per-bill `.cache/` checkpoint helps reruns after quota/timeouts; retry transient failures. Rows are generated with Python's `csv` module, preserving the original fields and order. No customer identifiers are requested or emitted; unavailable bill fields are `null`. Rate pacing defaults to five seconds between bills; use `--pause 8` if a lower account limit requires it. Delete `.cache/` to force re-extraction after prompt/code changes, or delete one `.cache/<bill_id>.json` for a targeted rerun.
+
+The model may make reading or reasoning mistakes on difficult scans. Review the printed due/late totals, itemized charges/taxes, signs, history chart and numeric answers against the images before uploading. Correct the code or prompt and regenerate outputs; never manually edit scored result cells. The training sample KESC_0008 has the guide's full expected JSON in §5.7, useful as a reference check.
+
+## AI usage and dependencies
+
+- Runtime model: **Gemini 3.5 Flash-Lite**, model ID `gemini-3.5-flash-lite`, via Google Gemini API / Google AI Studio free API key and `google-genai==2.29.0`. It reads bill images, extracts structured values and drafts English answers. No other runtime LLM or AI extraction service is used.
+- AI tools used to help write code and planning documentation: **ChatGPT / OpenAI Codex**. The participant guide expressly permits AI coding assistants. If other tools are used later, add their actual names here before packaging.
+- Other services: none. Local libraries: `python-dotenv==1.2.4` plus Python standard library `csv`, `json`, `zipfile`, etc. OCR/invoice-agent services: none.
+- Python: 3.11 or later. `requirements.txt` pins the two non-standard packages exactly.
+
+The real key is read as `GEMINI_API_KEY` from the local `.env`; `.env.example` contains a placeholder and the actual nonsecret model name. The application rejects any model name other than the permitted `gemini-3.5-flash-lite`.
