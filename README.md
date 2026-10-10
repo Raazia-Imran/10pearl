@@ -33,7 +33,7 @@ D:\10pearl-repo\
 ## Run
 
 ```bat
-python main.py --bills "test\bills" --level1-template "test\csv\level1.csv" --level2-template "test\csv\level2.csv" --output "output"
+python main.py --bills "test\bills" --level1-template "test\csv\level1.csv" --level2-template "test\csv\level2.csv" --output "output" --cache ".cache_test" --pause 12
 python prepare_submission.py --templates "test\csv" --output "output" --zip "submission.zip"
 ```
 
@@ -45,9 +45,17 @@ For the optional <=3-minute demo, record the image, command, a few values/answer
 
 ## Implementation
 
-The code matches each template `bill_id` to an image, asks the allowed multimodal model for the specified billing schema and nonidentifying monthly usage history, normalizes printed values and types, then submits all questions for that bill in one image-grounded request. A per-bill `.cache/` checkpoint helps reruns after quota/timeouts; retry transient failures. Rows are generated with Python's `csv` module, preserving the original fields and order. No customer identifiers are requested or emitted; unavailable bill fields are `null`. Rate pacing defaults to ten seconds between bills; use `--pause 15` if a lower account limit requires it. Delete `.cache/` to force re-extraction after prompt/code changes, or delete one `.cache/<bill_id>.json` for a targeted rerun.
+The code matches each template `bill_id` to an image, asks the allowed multimodal model for the specified billing schema and nonidentifying monthly usage history, normalizes printed values and types, then submits all questions for that bill in one image-grounded request. A per-bill `.cache/` checkpoint helps reruns after quota/timeouts; retry transient failures. Rows are generated with Python's `csv` module, preserving the original fields and order. No customer identifiers are requested or emitted; unavailable bill fields are `null`. Rate pacing defaults to ten seconds between bills; use `--pause 15` if a lower account limit requires it. Checkpoints are keyed by the image content, source code, model and exact questions. Changed input or code automatically invalidates old results. Keep the cache on restart; delete only a specific bill checkpoint if a fresh model read is needed. Cache and CSV writes use atomic replacement.
 
 The model may make reading or reasoning mistakes on difficult scans. Review the printed due/late totals, itemized charges/taxes, signs, history chart and numeric answers against the images before uploading. Correct the code or prompt and regenerate outputs; never manually edit scored result cells. The training sample KESC_0008 has the guide's full expected JSON in §5.7, useful as a reference check.
+
+## Numerical answer validation
+
+The same released question types are handled from extracted evidence and question text, without hard-coded bill values. Python calculates history maxima, same-month year comparisons, twelve-month averages, summer/winter totals, recent trends, seasonal baseline forecasts, recorded payment coverage, historical budgets and rough bill estimates. The previous twelve completed months exclude the current month. Three-month KE financial history is never presented as twelve months. Estimates state their assumptions and are not exact tariff predictions. Printed Level 1 values are never changed to make arithmetic reconcile.
+
+Gemini performs typed extraction of all eighteen bill fields, usage history and billing/payment history in one request per bill. Remaining visual questions are answered together in one typed response. Both charge and tax categories are schema enums. API calls have a two-minute timeout, bounded backoff, bill-level failure recovery and resumable checkpoints. A failed bill prevents a misleading complete submission.
+
+Local tests with the actual released template structure verified 10/120 rows, exact headers/IDs/questions/order, arithmetic edge cases, cache reuse and invalidation, and the ZIP allowlist. These used mocked API responses; they do not establish live image accuracy. Check the real outputs against the bills before submitting.
 
 ## AI usage and dependencies
 
